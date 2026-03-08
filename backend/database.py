@@ -27,13 +27,12 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 product_name TEXT NOT NULL,
                 megazoo_price REAL,
-                megazoo_source TEXT,
-                megazoo_link TEXT,
+                megazoo_url TEXT,
                 competitors_json TEXT,
                 avg_competitor_price REAL,
                 deviation_percent REAL,
                 recommended_price REAL,
-                total_results INTEGER,
+                competitor_count INTEGER,
                 created_at TEXT NOT NULL
             )
         """)
@@ -44,26 +43,25 @@ class Database:
         conn = self._get_conn()
         conn.execute("""
             INSERT INTO comparisons
-            (product_name, megazoo_price, megazoo_source, megazoo_link,
+            (product_name, megazoo_price, megazoo_url,
              competitors_json, avg_competitor_price, deviation_percent,
-             recommended_price, total_results, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             recommended_price, competitor_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             comparison["product_name"],
             comparison.get("megazoo_price"),
-            comparison.get("megazoo_source"),
-            comparison.get("megazoo_link"),
+            comparison.get("megazoo_url"),
             json.dumps(comparison.get("competitors", []), ensure_ascii=False),
             comparison.get("avg_competitor_price"),
             comparison.get("deviation_percent"),
             comparison.get("recommended_price"),
-            comparison.get("total_results"),
+            comparison.get("competitor_count"),
             datetime.now().isoformat(),
         ))
         conn.commit()
         conn.close()
 
-    def get_history(self, limit=50):
+    def get_history(self, limit=200):
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT * FROM comparisons ORDER BY created_at DESC LIMIT ?",
@@ -82,5 +80,11 @@ class Database:
     def delete_comparison(self, comparison_id):
         conn = self._get_conn()
         conn.execute("DELETE FROM comparisons WHERE id = ?", (comparison_id,))
+        conn.commit()
+        conn.close()
+
+    def clear_all(self):
+        conn = self._get_conn()
+        conn.execute("DELETE FROM comparisons")
         conn.commit()
         conn.close()

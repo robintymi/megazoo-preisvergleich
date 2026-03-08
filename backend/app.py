@@ -1,20 +1,28 @@
 """
 Megazoo Price Comparison Tool - Backend
-Vergleicht Preise von megazoo-shop.de mit Konkurrenten via Google Shopping.
+Automatisch Produkte von megazoo-shop.de crawlen und mit Google Shopping vergleichen.
 """
 
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
+from flask import Flask, jsonify, request, send_from_directory, Response
 import os
 import json
+import csv
+import io
+import threading
 from database import Database
-from scraper import GoogleShoppingScraper
+from scraper import MegazooCrawler, GoogleShoppingScraper
 
 app = Flask(__name__, static_folder="../frontend")
-CORS(app)
 
 db = Database()
+crawler = MegazooCrawler()
 scraper = GoogleShoppingScraper()
+
+# Track crawl/comparison progress
+progress = {
+    "crawl": {"running": False, "current": 0, "total": 0, "found": 0},
+    "compare": {"running": False, "current": 0, "total": 0, "errors": []},
+}
 
 
 @app.route("/")
@@ -27,121 +35,154 @@ def serve_static(path):
     return send_from_directory(os.path.join(app.static_folder, "static"), path)
 
 
-@app.route("/api/search", methods=["POST"])
-def search_product():
-    """Sucht ein Produkt bei Google Shopping und vergleicht Preise."""
-    data = request.get_json()
-    product_name = data.get("product_name", "").strip()
+# ---- Product Crawling ----
 
-    if not product_name:
-        return jsonify({"error": "Produktname ist erforderlich"}), 400
-
-    try:
-        results = scraper.search(product_name)
-
-        if not results:
-            return jsonify({"error": "Keine Ergebnisse gefunden"}), 404
-
-        # Separate Megazoo from competitors
-        megazoo_results = []
-        competitor_results = []
-
-        for r in results:
-            source_lower = r.get("source", "").lower()
-            if "megazoo" in source_lower:
-                megazoo_results.append(r)
-            else:
-                competitor_results.append(r)
-
-        # Sort competitors by price
-        competitor_results.sort(key=lambda x: x.get("price", float("inf")))
-
-        # Calculate stats from up to 6 competitors
-        top_competitors = competitor_results[:6]
-        competitor_prices = [c["price"] for c in top_competitors if c.get("price")]
-
-        avg_price = None
-        deviation = None
-        recommended_price = None
-        megazoo_price = megazoo_results[0]["price"] if megazoo_results else None
-
-        if competitor_prices:
-            avg_price = round(sum(competitor_prices) / len(competitor_prices), 2)
-
-            if megazoo_price and avg_price:
-                deviation = round(
-                    ((megazoo_price - avg_price) / avg_price) * 100, 1
-                )
-
-            # Recommended price: slightly below average to be competitive
-            recommended_price = round(avg_price * 0.97, 2)
-
-        comparison = {
-            "product_name": product_name,
-            "megazoo_price": megazoo_price,
-            "megazoo_source": megazoo_results[0].get("source") if megazoo_results else None,
-            "megazoo_link": megazoo_results[0].get("link") if megazoo_results else None,
-            "competitors": top_competitors,
-            "avg_competitor_price": avg_price,
-            "deviation_percent": deviation,
-            "recommended_price": recommended_price,
-            "total_results": len(results),
-        }
-
-        # Save to database
-        db.save_comparison(comparison)
-
-        return jsonify(comparison)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.route("/api/products", methods=["GET"])
+def get_products():
+    """Get cached megazoo products."""
+    cache = crawler.load_products_cache()
+    if cache:
+        return jsonify(cache)
+    return jsonify({"products": [], "count": 0, "crawled_at": None})
 
 
-@app.route("/api/history", methods=["GET"])
-def get_history():
-    """Gibt die letzten Vergleiche zurueck."""
-    limit = request.args.get("limit", 50, type=int)
-    history = db.get_history(limit)
-    return jsonify(history)
+@app.route("/api/products/crawl", methods=["POST"])
+def start_crawl():
+    """Start crawling megazoo-shop.de for all products (runs in background)."""
+    if progress["crawl"]["running"]:
+        return jsonify({"error": "Crawl laeuft bereits"}), 409
+
+    def run_crawl():
+        progress["crawl"] = {"running": True, "current": 0, "total": 0, "found": 0}
+        try:
+            def on_progress(current, total, found):
+                progress["crawl"]["current"] = current
+                progress["crawl"]["total"] = total
+                progress["crawl"]["found"] = found
+
+            crawler.crawl_all_products(progress_callback=on_progress)
+        finally:
+            progress["crawl"]["running"] = False
+
+    thread = threading.Thread(target=run_crawl, daemon=True)
+    thread.start()
+    return jsonify({"status": "started"})
 
 
-@app.route("/api/history/<int:comparison_id>", methods=["DELETE"])
-def delete_comparison(comparison_id):
-    """Loescht einen Vergleich."""
+@app.route("/api/products/crawl/status", methods=["GET"])
+def crawl_status():
+    """Get current crawl progress."""
+    return jsonify(progress["crawl"])
+
+
+# ---- Price Comparison ----
+
+@app.route("/api/compare/start", methods=["POST"])
+def start_comparison():
+    """Start comparing products with Google Shopping."""
+    if progress["compare"]["running"]:
+        return jsonify({"error": "Vergleich laeuft bereits"}), 409
+
+    data = request.get_json() or {}
+    product_indices = data.get("indices")
+    offset = data.get("offset", 0)
+    limit = data.get("limit", scraper.settings.get("batch_size", 20))
+
+    cache = crawler.load_products_cache()
+    if not cache or not cache.get("products"):
+        return jsonify({"error": "Keine Produkte geladen. Zuerst Crawl starten."}), 400
+
+    products = cache["products"]
+
+    if product_indices:
+        selected = [products[i] for i in product_indices if i < len(products)]
+    else:
+        selected = products[offset:offset + limit]
+
+    if not selected:
+        return jsonify({"error": "Keine Produkte im angegebenen Bereich"}), 400
+
+    def run_comparison():
+        progress["compare"] = {"running": True, "current": 0, "total": len(selected), "errors": []}
+        try:
+            for i, product in enumerate(selected):
+                try:
+                    result = scraper.compare_product(product)
+                    db.save_comparison(result)
+                except Exception as e:
+                    progress["compare"]["errors"].append({
+                        "product": product["name"],
+                        "error": str(e),
+                    })
+                progress["compare"]["current"] = i + 1
+
+                if i < len(selected) - 1:
+                    import time
+                    time.sleep(scraper.settings.get("delay_between_requests", 2))
+        finally:
+            progress["compare"]["running"] = False
+
+    thread = threading.Thread(target=run_comparison, daemon=True)
+    thread.start()
+    return jsonify({"status": "started", "count": len(selected)})
+
+
+@app.route("/api/compare/status", methods=["GET"])
+def compare_status():
+    """Get current comparison progress."""
+    return jsonify(progress["compare"])
+
+
+# ---- Results & History ----
+
+@app.route("/api/results", methods=["GET"])
+def get_results():
+    """Get all comparison results."""
+    limit = request.args.get("limit", 200, type=int)
+    results = db.get_history(limit)
+    return jsonify(results)
+
+
+@app.route("/api/results/<int:comparison_id>", methods=["DELETE"])
+def delete_result(comparison_id):
     db.delete_comparison(comparison_id)
     return jsonify({"status": "deleted"})
 
 
-@app.route("/api/export", methods=["GET"])
-def export_csv():
-    """Exportiert alle Vergleiche als CSV."""
-    import csv
-    import io
+@app.route("/api/results/clear", methods=["DELETE"])
+def clear_results():
+    db.clear_all()
+    return jsonify({"status": "cleared"})
 
-    history = db.get_history(limit=1000)
+
+@app.route("/api/export", methods=["GET"])
+def export_csv_file():
+    """Export all comparisons as CSV."""
+    results = db.get_history(limit=5000)
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     writer.writerow([
-        "Produkt", "Megazoo Preis", "Konkurrent 1", "Konkurrent 2",
-        "Konkurrent 3", "Konkurrent 4", "Konkurrent 5", "Konkurrent 6",
+        "Produkt", "Megazoo Preis", "Megazoo URL",
+        "Konkurrent 1", "Preis 1", "Konkurrent 2", "Preis 2",
+        "Konkurrent 3", "Preis 3", "Konkurrent 4", "Preis 4",
+        "Konkurrent 5", "Preis 5", "Konkurrent 6", "Preis 6",
         "Durchschnitt Konkurrenz", "Abweichung %", "Empfohlener Preis", "Datum"
     ])
 
-    for item in history:
-        row = [item["product_name"], item.get("megazoo_price", "")]
+    for item in results:
+        row = [item["product_name"], item.get("megazoo_price", ""), item.get("megazoo_url", "")]
         competitors = item.get("competitors", [])
         for i in range(6):
             if i < len(competitors):
-                row.append(f"{competitors[i].get('price', '')} ({competitors[i].get('source', '')})")
+                row.extend([competitors[i].get("source", ""), competitors[i].get("price", "")])
             else:
-                row.append("")
+                row.extend(["", ""])
         row.append(item.get("avg_competitor_price", ""))
         row.append(item.get("deviation_percent", ""))
         row.append(item.get("recommended_price", ""))
         row.append(item.get("created_at", ""))
         writer.writerow(row)
 
-    from flask import Response
     return Response(
         output.getvalue(),
         mimetype="text/csv",
@@ -149,15 +190,15 @@ def export_csv():
     )
 
 
+# ---- Settings ----
+
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    """Gibt die aktuellen Einstellungen zurueck."""
     return jsonify(scraper.get_settings())
 
 
 @app.route("/api/settings", methods=["POST"])
 def update_settings():
-    """Aktualisiert die Einstellungen."""
     data = request.get_json()
     scraper.update_settings(data)
     return jsonify({"status": "updated"})

@@ -1,189 +1,346 @@
 const API = "";
+let allProducts = [];
+let allResults = [];
+let currentSort = { key: null, asc: true };
+let crawlPollTimer = null;
+let comparePollTimer = null;
 
-// On page load
 document.addEventListener("DOMContentLoaded", () => {
-    loadHistory();
+    loadProducts();
+    loadResults();
     loadSettings();
-
-    // Enter key to search
-    document.getElementById("searchInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") searchProduct();
-    });
 });
 
-async function searchProduct() {
-    const input = document.getElementById("searchInput");
-    const productName = input.value.trim();
-    if (!productName) return;
-
-    const statusEl = document.getElementById("searchStatus");
-    const searchBtn = document.getElementById("searchBtn");
-
-    statusEl.textContent = "Suche laeuft... (kann einige Sekunden dauern)";
-    statusEl.className = "status-message loading";
-    searchBtn.disabled = true;
-
-    try {
-        const res = await fetch(`${API}/api/search`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ product_name: productName }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-            statusEl.textContent = data.error || "Fehler bei der Suche";
-            statusEl.className = "status-message error";
-            return;
-        }
-
-        statusEl.textContent = `${data.total_results} Ergebnisse gefunden`;
-        statusEl.className = "status-message";
-
-        displayResults(data);
-        loadHistory();
-    } catch (err) {
-        statusEl.textContent = "Verbindungsfehler: " + err.message;
-        statusEl.className = "status-message error";
-    } finally {
-        searchBtn.disabled = false;
-    }
-}
+// ---- Formatting ----
 
 function formatPrice(price) {
     if (price === null || price === undefined) return "-";
     return price.toLocaleString("de-DE", { style: "currency", currency: "EUR" });
 }
 
-function displayResults(data) {
-    const section = document.getElementById("resultsSection");
-    section.classList.remove("hidden");
-
-    document.getElementById("resultProductName").textContent = data.product_name;
-
-    // Megazoo price
-    document.getElementById("megazooPrice").textContent = formatPrice(data.megazoo_price);
-    document.getElementById("megazooSource").textContent = data.megazoo_source || "Nicht gefunden";
-
-    // Average
-    document.getElementById("avgPrice").textContent = formatPrice(data.avg_competitor_price);
-    document.getElementById("competitorCount").textContent =
-        `Aus ${data.competitors ? data.competitors.length : 0} Anbietern`;
-
-    // Deviation
-    const deviationEl = document.getElementById("deviation");
-    const deviationCard = deviationEl.closest(".card");
-    if (data.deviation_percent !== null && data.deviation_percent !== undefined) {
-        const prefix = data.deviation_percent > 0 ? "+" : "";
-        deviationEl.textContent = `${prefix}${data.deviation_percent}%`;
-        deviationCard.className = data.deviation_percent <= 0
-            ? "card deviation-card positive"
-            : "card deviation-card";
-        document.getElementById("deviationLabel").textContent =
-            data.deviation_percent > 0 ? "Megazoo ist teurer" : "Megazoo ist guenstiger";
-    } else {
-        deviationEl.textContent = "-";
-        document.getElementById("deviationLabel").textContent = "";
-    }
-
-    // Recommended
-    document.getElementById("recommendedPrice").textContent = formatPrice(data.recommended_price);
-
-    // Comparison table
-    const tbody = document.getElementById("comparisonBody");
-    tbody.innerHTML = "";
-
-    // Add Megazoo row first
-    if (data.megazoo_price) {
-        const tr = document.createElement("tr");
-        tr.className = "megazoo-row";
-        const devFromAvg = data.avg_competitor_price
-            ? ((data.megazoo_price - data.avg_competitor_price) / data.avg_competitor_price * 100).toFixed(1)
-            : null;
-        tr.innerHTML = `
-            <td>Megazoo</td>
-            <td>${formatPrice(data.megazoo_price)}</td>
-            <td>${devFromAvg !== null ? (devFromAvg > 0 ? '+' : '') + devFromAvg + '%' : '-'}</td>
-            <td>${data.megazoo_link ? `<a href="${escapeHtml(data.megazoo_link)}" target="_blank">Ansehen</a>` : '-'}</td>
-        `;
-        tbody.appendChild(tr);
-    }
-
-    // Add competitor rows
-    if (data.competitors) {
-        data.competitors.forEach((comp) => {
-            const tr = document.createElement("tr");
-            const devFromAvg = data.avg_competitor_price
-                ? ((comp.price - data.avg_competitor_price) / data.avg_competitor_price * 100).toFixed(1)
-                : null;
-            const priceClass = data.megazoo_price
-                ? (comp.price < data.megazoo_price ? "price-cheaper" : comp.price > data.megazoo_price ? "price-expensive" : "")
-                : "";
-            tr.innerHTML = `
-                <td>${escapeHtml(comp.source)}</td>
-                <td class="${priceClass}">${formatPrice(comp.price)}</td>
-                <td>${devFromAvg !== null ? (devFromAvg > 0 ? '+' : '') + devFromAvg + '%' : '-'}</td>
-                <td>${comp.link ? `<a href="${escapeHtml(comp.link)}" target="_blank">Ansehen</a>` : '-'}</td>
-            `;
-            tbody.appendChild(tr);
-        });
-    }
+function escapeHtml(str) {
+    if (!str) return "";
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
 }
 
-async function loadHistory() {
+// ---- Step 1: Crawl Products ----
+
+async function loadProducts() {
     try {
-        const res = await fetch(`${API}/api/history`);
-        const history = await res.json();
-        displayHistory(history);
+        const res = await fetch(`${API}/api/products`);
+        const data = await res.json();
+        allProducts = data.products || [];
+
+        const summary = document.getElementById("productSummary");
+        if (allProducts.length > 0) {
+            summary.classList.remove("hidden");
+            document.getElementById("productCount").textContent = data.count;
+            document.getElementById("crawlDate").textContent =
+                `Stand: ${data.crawled_at || "-"}`;
+            renderProductsList();
+        }
     } catch (err) {
-        console.error("History load error:", err);
+        console.error("Load products error:", err);
     }
 }
 
-function displayHistory(history) {
-    const tbody = document.getElementById("historyBody");
-    tbody.innerHTML = "";
+async function startCrawl() {
+    const btn = document.getElementById("crawlBtn");
+    const status = document.getElementById("crawlStatus");
+    btn.disabled = true;
+    status.textContent = "Starte Crawl...";
+    status.className = "status-text";
 
-    if (history.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888;padding:2rem">Noch keine Suchen durchgefuehrt</td></tr>';
+    try {
+        const res = await fetch(`${API}/api/products/crawl`, { method: "POST" });
+        const data = await res.json();
+
+        if (!res.ok) {
+            status.textContent = data.error;
+            status.className = "status-text error";
+            btn.disabled = false;
+            return;
+        }
+
+        document.getElementById("crawlProgress").classList.remove("hidden");
+        pollCrawlProgress();
+    } catch (err) {
+        status.textContent = "Fehler: " + err.message;
+        status.className = "status-text error";
+        btn.disabled = false;
+    }
+}
+
+function pollCrawlProgress() {
+    if (crawlPollTimer) clearInterval(crawlPollTimer);
+    crawlPollTimer = setInterval(async () => {
+        try {
+            const res = await fetch(`${API}/api/products/crawl/status`);
+            const data = await res.json();
+
+            const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+            document.getElementById("crawlProgressBar").style.width = pct + "%";
+            document.getElementById("crawlProgressText").textContent =
+                `${data.current}/${data.total} Seiten | ${data.found} Produkte gefunden (${pct}%)`;
+            document.getElementById("crawlStatus").textContent = "Crawl laeuft...";
+
+            if (!data.running && data.current > 0) {
+                clearInterval(crawlPollTimer);
+                document.getElementById("crawlBtn").disabled = false;
+                document.getElementById("crawlStatus").textContent = "Fertig!";
+                document.getElementById("crawlProgress").classList.add("hidden");
+                loadProducts();
+            }
+        } catch (err) {
+            console.error("Poll error:", err);
+        }
+    }, 2000);
+}
+
+// ---- Step 2: Compare ----
+
+async function startComparison() {
+    const btn = document.getElementById("compareBtn");
+    const status = document.getElementById("compareStatus");
+    const offset = parseInt(document.getElementById("compareOffset").value) || 0;
+    const limit = parseInt(document.getElementById("compareLimit").value) || 20;
+
+    btn.disabled = true;
+    status.textContent = "Starte Vergleich...";
+    status.className = "status-text";
+
+    try {
+        const res = await fetch(`${API}/api/compare/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ offset, limit }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+            status.textContent = data.error;
+            status.className = "status-text error";
+            btn.disabled = false;
+            return;
+        }
+
+        status.textContent = `Vergleiche ${data.count} Produkte...`;
+        document.getElementById("compareProgress").classList.remove("hidden");
+        pollCompareProgress();
+    } catch (err) {
+        status.textContent = "Fehler: " + err.message;
+        status.className = "status-text error";
+        btn.disabled = false;
+    }
+}
+
+function pollCompareProgress() {
+    if (comparePollTimer) clearInterval(comparePollTimer);
+    comparePollTimer = setInterval(async () => {
+        try {
+            const res = await fetch(`${API}/api/compare/status`);
+            const data = await res.json();
+
+            const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+            document.getElementById("compareProgressBar").style.width = pct + "%";
+            document.getElementById("compareProgressText").textContent =
+                `${data.current}/${data.total} Produkte verglichen (${pct}%)`;
+
+            // Show errors
+            if (data.errors && data.errors.length > 0) {
+                const errDiv = document.getElementById("compareErrors");
+                errDiv.classList.remove("hidden");
+                errDiv.innerHTML = data.errors.map(e =>
+                    `<div>${escapeHtml(e.product)}: ${escapeHtml(e.error)}</div>`
+                ).join("");
+            }
+
+            if (!data.running && data.current > 0) {
+                clearInterval(comparePollTimer);
+                document.getElementById("compareBtn").disabled = false;
+                document.getElementById("compareStatus").textContent = "Fertig!";
+                document.getElementById("compareProgress").classList.add("hidden");
+                loadResults();
+            }
+        } catch (err) {
+            console.error("Poll error:", err);
+        }
+    }, 3000);
+}
+
+async function compareSingleProduct(index) {
+    try {
+        const res = await fetch(`${API}/api/compare/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ indices: [index] }),
+        });
+        if (res.ok) {
+            document.getElementById("compareProgress").classList.remove("hidden");
+            pollCompareProgress();
+        }
+    } catch (err) {
+        console.error("Compare single error:", err);
+    }
+}
+
+// ---- Step 3: Results ----
+
+async function loadResults() {
+    try {
+        const res = await fetch(`${API}/api/results`);
+        allResults = await res.json();
+        renderResults();
+    } catch (err) {
+        console.error("Load results error:", err);
+    }
+}
+
+function renderResults() {
+    const tbody = document.getElementById("resultsBody");
+    const statsBar = document.getElementById("statsBar");
+
+    if (allResults.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">Noch keine Vergleiche. Starte zuerst den Crawl und dann den Vergleich.</td></tr>';
+        statsBar.classList.add("hidden");
         return;
     }
 
-    history.forEach((item) => {
-        const tr = document.createElement("tr");
-        const date = new Date(item.created_at).toLocaleString("de-DE", {
-            day: "2-digit", month: "2-digit", year: "numeric",
-            hour: "2-digit", minute: "2-digit"
+    // Stats
+    statsBar.classList.remove("hidden");
+    let cheaper = 0, expensive = 0, totalDev = 0, devCount = 0;
+    allResults.forEach(r => {
+        if (r.deviation_percent !== null && r.deviation_percent !== undefined) {
+            if (r.deviation_percent < 0) cheaper++;
+            else if (r.deviation_percent > 0) expensive++;
+            totalDev += r.deviation_percent;
+            devCount++;
+        }
+    });
+    document.getElementById("statTotal").textContent = allResults.length;
+    document.getElementById("statCheaper").textContent = cheaper;
+    document.getElementById("statExpensive").textContent = expensive;
+    document.getElementById("statAvgDev").textContent =
+        devCount > 0 ? (totalDev / devCount).toFixed(1) + "%" : "-";
+
+    // Sort
+    let sorted = [...allResults];
+    if (currentSort.key) {
+        sorted.sort((a, b) => {
+            let va = a[currentSort.key];
+            let vb = b[currentSort.key];
+            if (va === null || va === undefined) va = currentSort.asc ? Infinity : -Infinity;
+            if (vb === null || vb === undefined) vb = currentSort.asc ? Infinity : -Infinity;
+            if (typeof va === "string") return currentSort.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            return currentSort.asc ? va - vb : vb - va;
         });
+    }
+
+    tbody.innerHTML = "";
+    sorted.forEach(item => {
+        const tr = document.createElement("tr");
         const comp = item.competitors || [];
 
-        const deviationClass = item.deviation_percent !== null
-            ? (item.deviation_percent > 0 ? "price-expensive" : "price-cheaper")
+        const devClass = item.deviation_percent !== null
+            ? (item.deviation_percent < -2 ? "price-cheaper" :
+               item.deviation_percent > 2 ? "price-expensive" : "price-neutral")
             : "";
 
+        const devText = item.deviation_percent !== null
+            ? (item.deviation_percent > 0 ? "+" : "") + item.deviation_percent + "%"
+            : "-";
+
         tr.innerHTML = `
-            <td>${date}</td>
-            <td>${escapeHtml(item.product_name)}</td>
-            <td>${formatPrice(item.megazoo_price)}</td>
-            <td>${comp[0] ? formatPrice(comp[0].price) + '<br><small>' + escapeHtml(comp[0].source) + '</small>' : '-'}</td>
-            <td>${comp[1] ? formatPrice(comp[1].price) + '<br><small>' + escapeHtml(comp[1].source) + '</small>' : '-'}</td>
+            <td>
+                <a href="${escapeHtml(item.megazoo_url || '#')}" target="_blank">${escapeHtml(item.product_name)}</a>
+            </td>
+            <td><strong>${formatPrice(item.megazoo_price)}</strong></td>
+            <td>${renderCompetitor(comp[0])}</td>
+            <td>${renderCompetitor(comp[1])}</td>
+            <td>${renderCompetitor(comp[2])}</td>
             <td>${formatPrice(item.avg_competitor_price)}</td>
-            <td class="${deviationClass}">${item.deviation_percent !== null ? (item.deviation_percent > 0 ? '+' : '') + item.deviation_percent + '%' : '-'}</td>
+            <td class="${devClass}">${devText}</td>
             <td>${formatPrice(item.recommended_price)}</td>
-            <td><button class="btn-danger" onclick="deleteEntry(${item.id})">X</button></td>
         `;
         tbody.appendChild(tr);
     });
 }
 
-async function deleteEntry(id) {
-    try {
-        await fetch(`${API}/api/history/${id}`, { method: "DELETE" });
-        loadHistory();
-    } catch (err) {
-        console.error("Delete error:", err);
+function renderCompetitor(comp) {
+    if (!comp) return "-";
+    return `${formatPrice(comp.price)}<small>${escapeHtml(comp.source)}</small>`;
+}
+
+function sortTable(key) {
+    if (currentSort.key === key) {
+        currentSort.asc = !currentSort.asc;
+    } else {
+        currentSort.key = key;
+        currentSort.asc = true;
     }
+    renderResults();
+}
+
+async function clearResults() {
+    if (!confirm("Alle Ergebnisse loeschen?")) return;
+    await fetch(`${API}/api/results/clear`, { method: "DELETE" });
+    loadResults();
+}
+
+function exportCSV() {
+    window.location.href = `${API}/api/export`;
+}
+
+// ---- Products List ----
+
+function toggleProducts() {
+    const list = document.getElementById("productsList");
+    const arrow = document.getElementById("productToggle");
+    list.classList.toggle("hidden");
+    arrow.classList.toggle("open");
+}
+
+function renderProductsList() {
+    const tbody = document.getElementById("productsBody");
+    const filter = (document.getElementById("productFilter")?.value || "").toLowerCase();
+
+    const filtered = allProducts.filter(p =>
+        !filter || p.name.toLowerCase().includes(filter)
+    );
+
+    tbody.innerHTML = "";
+    filtered.slice(0, 200).forEach((p, idx) => {
+        const realIdx = allProducts.indexOf(p);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${realIdx}</td>
+            <td><a href="${escapeHtml(p.url)}" target="_blank">${escapeHtml(p.name)}</a></td>
+            <td>${formatPrice(p.price)}</td>
+            <td><button class="btn-sm" onclick="compareSingleProduct(${realIdx})">Vergleichen</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    if (filtered.length > 200) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4" class="empty-msg">... und ${filtered.length - 200} weitere (Filter benutzen)</td>`;
+        tbody.appendChild(tr);
+    }
+}
+
+function filterProducts() {
+    renderProductsList();
+}
+
+// ---- Settings ----
+
+function toggleSettings() {
+    const panel = document.getElementById("settingsPanel");
+    const arrow = document.getElementById("settingsToggle");
+    panel.classList.toggle("hidden");
+    arrow.classList.toggle("open");
 }
 
 async function loadSettings() {
@@ -193,6 +350,10 @@ async function loadSettings() {
         if (settings.serpapi_key_masked) {
             document.getElementById("apiKey").placeholder = `Aktuell: ${settings.serpapi_key_masked}`;
         }
+        if (settings.batch_size) {
+            document.getElementById("batchSize").value = settings.batch_size;
+            document.getElementById("compareLimit").value = settings.batch_size;
+        }
     } catch (err) {
         console.error("Settings load error:", err);
     }
@@ -200,32 +361,27 @@ async function loadSettings() {
 
 async function saveSettings() {
     const apiKey = document.getElementById("apiKey").value.trim();
-    if (!apiKey) return;
+    const batchSize = parseInt(document.getElementById("batchSize").value) || 20;
+
+    const body = { batch_size: batchSize };
+    if (apiKey) body.serpapi_key = apiKey;
 
     try {
         const res = await fetch(`${API}/api/settings`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ serpapi_key: apiKey }),
+            body: JSON.stringify(body),
         });
-
         if (res.ok) {
-            document.getElementById("apiKey").value = "";
-            document.getElementById("apiKey").placeholder = `Aktuell: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`;
-            alert("Einstellungen gespeichert!");
+            if (apiKey) {
+                document.getElementById("apiKey").value = "";
+                document.getElementById("apiKey").placeholder =
+                    `Aktuell: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`;
+            }
+            document.getElementById("compareLimit").value = batchSize;
+            alert("Gespeichert!");
         }
     } catch (err) {
-        alert("Fehler beim Speichern: " + err.message);
+        alert("Fehler: " + err.message);
     }
-}
-
-function exportCSV() {
-    window.location.href = `${API}/api/export`;
-}
-
-function escapeHtml(str) {
-    if (!str) return "";
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
 }

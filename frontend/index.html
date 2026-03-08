@@ -9,104 +9,140 @@
 <body>
     <header>
         <h1>Megazoo Preisvergleich</h1>
-        <p class="subtitle">Google Shopping Preisanalyse</p>
+        <p class="subtitle">Automatischer Preisvergleich: megazoo-shop.de vs. Konkurrenz (Google Shopping)</p>
     </header>
 
     <main>
-        <!-- Search Section -->
-        <section class="search-section">
-            <div class="search-box">
-                <input type="text" id="searchInput" placeholder="Produktname eingeben..." autocomplete="off">
-                <button id="searchBtn" onclick="searchProduct()">Suchen</button>
+        <!-- Step 1: Crawl Products -->
+        <section class="step-section">
+            <div class="step-header">
+                <span class="step-badge">1</span>
+                <h2>Megazoo Produkte laden</h2>
             </div>
-            <div id="searchStatus" class="status-message"></div>
-        </section>
-
-        <!-- Results Section -->
-        <section id="resultsSection" class="results-section hidden">
-            <h2>Ergebnis: <span id="resultProductName"></span></h2>
-
-            <div class="summary-cards">
-                <div class="card megazoo-card">
-                    <h3>Megazoo Preis</h3>
-                    <div class="price" id="megazooPrice">-</div>
-                    <div class="source" id="megazooSource"></div>
-                </div>
-                <div class="card avg-card">
-                    <h3>Durchschnitt Konkurrenz</h3>
-                    <div class="price" id="avgPrice">-</div>
-                    <div class="source" id="competitorCount"></div>
-                </div>
-                <div class="card deviation-card">
-                    <h3>Abweichung</h3>
-                    <div class="price" id="deviation">-</div>
-                    <div class="source" id="deviationLabel"></div>
-                </div>
-                <div class="card recommended-card">
-                    <h3>Empfohlener Preis</h3>
-                    <div class="price" id="recommendedPrice">-</div>
-                    <div class="source">3% unter Durchschnitt</div>
-                </div>
+            <p class="step-desc">Crawlt automatisch alle Produkte und Preise von megazoo-shop.de</p>
+            <div class="step-actions">
+                <button id="crawlBtn" onclick="startCrawl()">Produkte crawlen</button>
+                <span id="crawlStatus" class="status-text"></span>
             </div>
-
-            <h3>Detailvergleich</h3>
-            <div class="table-wrapper">
-                <table id="comparisonTable">
-                    <thead>
-                        <tr>
-                            <th>Anbieter</th>
-                            <th>Preis</th>
-                            <th>Abweichung zum Durchschnitt</th>
-                            <th>Link</th>
-                        </tr>
-                    </thead>
-                    <tbody id="comparisonBody"></tbody>
-                </table>
+            <div id="crawlProgress" class="progress-bar-wrapper hidden">
+                <div class="progress-bar"><div id="crawlProgressBar" class="progress-fill"></div></div>
+                <span id="crawlProgressText" class="progress-text"></span>
+            </div>
+            <div id="productSummary" class="summary-box hidden">
+                <strong id="productCount">0</strong> Produkte geladen
+                <span class="sep">|</span>
+                <span id="crawlDate">-</span>
             </div>
         </section>
 
-        <!-- History Section -->
-        <section class="history-section">
-            <div class="section-header">
-                <h2>Verlauf</h2>
-                <button class="btn-secondary" onclick="exportCSV()">CSV Export</button>
+        <!-- Step 2: Compare Prices -->
+        <section class="step-section">
+            <div class="step-header">
+                <span class="step-badge">2</span>
+                <h2>Preisvergleich starten</h2>
             </div>
+            <p class="step-desc">Vergleicht Megazoo-Preise mit Google Shopping Konkurrenz (SerpAPI, 100 Suchen/Monat gratis)</p>
+            <div class="step-actions">
+                <label>Von Produkt: <input type="number" id="compareOffset" value="0" min="0" style="width:60px"></label>
+                <label>Anzahl: <input type="number" id="compareLimit" value="20" min="1" max="100" style="width:60px"></label>
+                <button id="compareBtn" onclick="startComparison()">Vergleich starten</button>
+                <span id="compareStatus" class="status-text"></span>
+            </div>
+            <div id="compareProgress" class="progress-bar-wrapper hidden">
+                <div class="progress-bar"><div id="compareProgressBar" class="progress-fill"></div></div>
+                <span id="compareProgressText" class="progress-text"></span>
+            </div>
+            <div id="compareErrors" class="error-list hidden"></div>
+        </section>
+
+        <!-- Step 3: Results -->
+        <section class="step-section">
+            <div class="step-header">
+                <span class="step-badge">3</span>
+                <h2>Ergebnisse</h2>
+                <div class="step-header-actions">
+                    <button class="btn-secondary" onclick="exportCSV()">CSV Export</button>
+                    <button class="btn-danger" onclick="clearResults()">Alle loeschen</button>
+                </div>
+            </div>
+
+            <div id="statsBar" class="stats-bar hidden">
+                <div class="stat"><span class="stat-value" id="statTotal">0</span><span class="stat-label">Produkte verglichen</span></div>
+                <div class="stat"><span class="stat-value" id="statCheaper">0</span><span class="stat-label">Guenstiger</span></div>
+                <div class="stat"><span class="stat-value" id="statExpensive">0</span><span class="stat-label">Teurer</span></div>
+                <div class="stat"><span class="stat-value" id="statAvgDev">0%</span><span class="stat-label">Durchschn. Abweichung</span></div>
+            </div>
+
             <div class="table-wrapper">
-                <table id="historyTable">
+                <table id="resultsTable">
                     <thead>
                         <tr>
-                            <th>Datum</th>
-                            <th>Produkt</th>
-                            <th>Megazoo</th>
+                            <th class="sortable" onclick="sortTable('product_name')">Produkt</th>
+                            <th class="sortable" onclick="sortTable('megazoo_price')">Megazoo Preis</th>
                             <th>Konkurrent 1</th>
                             <th>Konkurrent 2</th>
-                            <th>Durchschnitt (6)</th>
-                            <th>Abweichung %</th>
-                            <th>Empfohlen</th>
-                            <th></th>
+                            <th>Konkurrent 3</th>
+                            <th class="sortable" onclick="sortTable('avg_competitor_price')">Durchschnitt (6)</th>
+                            <th class="sortable" onclick="sortTable('deviation_percent')">Abweichung %</th>
+                            <th class="sortable" onclick="sortTable('recommended_price')">Empfohlen</th>
                         </tr>
                     </thead>
-                    <tbody id="historyBody"></tbody>
+                    <tbody id="resultsBody">
+                        <tr><td colspan="8" class="empty-msg">Noch keine Vergleiche. Starte zuerst den Crawl und dann den Vergleich.</td></tr>
+                    </tbody>
                 </table>
             </div>
         </section>
 
-        <!-- Settings Section -->
-        <section class="settings-section">
-            <h2>Einstellungen</h2>
-            <div class="settings-form">
-                <div class="form-group">
-                    <label for="apiKey">SerpAPI Key</label>
-                    <input type="password" id="apiKey" placeholder="Kostenlos auf serpapi.com registrieren">
-                    <small>100 Suchen/Monat gratis. <a href="https://serpapi.com" target="_blank">Key holen</a></small>
+        <!-- Products List (collapsible) -->
+        <section class="step-section">
+            <div class="step-header clickable" onclick="toggleProducts()">
+                <h2>Alle Megazoo Produkte <span id="productToggle" class="toggle-arrow">&#9654;</span></h2>
+            </div>
+            <div id="productsList" class="hidden">
+                <div class="search-filter">
+                    <input type="text" id="productFilter" placeholder="Produkte filtern..." oninput="filterProducts()">
                 </div>
-                <button onclick="saveSettings()">Speichern</button>
+                <div class="table-wrapper">
+                    <table id="productsTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Produkt</th>
+                                <th>Preis</th>
+                                <th>Aktion</th>
+                            </tr>
+                        </thead>
+                        <tbody id="productsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Settings -->
+        <section class="step-section">
+            <div class="step-header clickable" onclick="toggleSettings()">
+                <h2>Einstellungen <span id="settingsToggle" class="toggle-arrow">&#9654;</span></h2>
+            </div>
+            <div id="settingsPanel" class="hidden">
+                <div class="settings-form">
+                    <div class="form-group">
+                        <label for="apiKey">SerpAPI Key</label>
+                        <input type="password" id="apiKey" placeholder="Kostenlos auf serpapi.com registrieren">
+                        <small>100 Suchen/Monat gratis. <a href="https://serpapi.com" target="_blank">Key holen</a></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="batchSize">Batch-Groesse (Produkte pro Durchlauf)</label>
+                        <input type="number" id="batchSize" value="20" min="1" max="100">
+                    </div>
+                    <button onclick="saveSettings()">Speichern</button>
+                </div>
             </div>
         </section>
     </main>
 
     <footer>
-        <p>Megazoo Preisvergleich Tool | Google Shopping Analyse</p>
+        <p>Megazoo Preisvergleich Tool | SerpAPI Free Tier (100 Suchen/Monat)</p>
     </footer>
 
     <script src="/static/js/app.js"></script>
