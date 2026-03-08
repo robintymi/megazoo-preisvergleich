@@ -13,8 +13,14 @@ import requests
 from io import BytesIO
 from xml.etree import ElementTree as ET
 
-SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "settings.json")
-PRODUCTS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "megazoo_products.json")
+# On Vercel (serverless), use /tmp for writable storage
+if os.environ.get("VERCEL"):
+    _DATA_DIR = "/tmp/data"
+else:
+    _DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+SETTINGS_PATH = os.path.join(_DATA_DIR, "settings.json")
+PRODUCTS_CACHE_PATH = os.path.join(_DATA_DIR, "megazoo_products.json")
 
 DEFAULT_SETTINGS = {
     "serpapi_key": "",

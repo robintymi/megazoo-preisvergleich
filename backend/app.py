@@ -16,7 +16,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from database import Database
 from scraper import MegazooCrawler, GoogleShoppingScraper
 
-app = Flask(__name__, static_folder="../frontend")
+# Resolve frontend path relative to this file's directory
+_FRONTEND_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend"))
+app = Flask(__name__, static_folder=_FRONTEND_DIR)
 
 db = Database()
 crawler = MegazooCrawler()

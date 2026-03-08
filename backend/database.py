@@ -7,7 +7,13 @@ import json
 import os
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comparisons.db")
+# On Vercel (serverless), use /tmp for writable storage
+if os.environ.get("VERCEL"):
+    DATA_DIR = "/tmp/data"
+else:
+    DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+DB_PATH = os.path.join(DATA_DIR, "comparisons.db")
 
 
 class Database:
