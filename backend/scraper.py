@@ -73,40 +73,50 @@ class MegazooCrawler:
 
             html = resp.text
 
-            # Extract product name from title tag
-            title_match = re.search(r"<title>([^<]+)</title>", html)
+            # Extract product name from title tag (may have attributes like <title lang="de">)
+            title_match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
             title = title_match.group(1).strip() if title_match else ""
+
+            # Fallback: og:title
+            if not title:
+                og_match = re.search(r'property="og:title"\s+content="([^"]+)"', html)
+                title = og_match.group(1).strip() if og_match else ""
+
+            # Fallback: extract name from URL slug
+            if not title:
+                slug = url.rstrip("/").split("/")[-1]
+                title = slug.replace("-", " ")
+
             # Clean title: remove " | megazoo-shop.de" suffix etc
-            title = re.split(r"\s*[\|–-]\s*megazoo", title, flags=re.IGNORECASE)[0].strip()
+            title = re.split(r"\s*[\|–]\s*megazoo", title, flags=re.IGNORECASE)[0].strip()
+
+            # Remove trailing price from title (format: "Name, 6,49 €")
+            title = re.sub(r",?\s*[\d.,]+\s*[\x80-\xff€]\s*$", "", title).strip()
 
             # Extract price from dataLayer (Google Tag Manager)
-            # Pattern: 'price': 6.49 or "price": 6.49
             price_match = re.search(r"['\"]price['\"]:\s*([\d.]+)", html)
             price = float(price_match.group(1)) if price_match else None
 
-            # Also try to get price from the page title format "Name, 6,49 €"
-            if price is None:
-                title_price = re.search(r"([\d.,]+)\s*€", title)
-                if title_price:
-                    price_str = title_price.group(1).replace(".", "").replace(",", ".")
-                    try:
-                        price = float(price_str)
-                        # Remove price from title
-                        title = re.sub(r",?\s*[\d.,]+\s*€", "", title).strip()
-                    except ValueError:
-                        pass
+            # Extract EAN/GTIN from structured data
+            ean_match = re.search(r'itemprop="gtin13"[^>]*>(\d{13})<', html)
+            ean = ean_match.group(1) if ean_match else None
 
-            # Remove trailing price from title if present
-            title = re.sub(r",?\s*[\d.,]+\s*€\s*$", "", title).strip()
+            # Fallback: any 13-digit EAN on the page
+            if not ean:
+                ean13_matches = re.findall(r'\b(\d{13})\b', html)
+                ean = ean13_matches[0] if ean13_matches else None
 
-            if not title or price is None:
+            if not title or price is None or price == 0:
                 return None
 
-            return {
+            result = {
                 "name": title,
                 "price": round(price, 2),
                 "url": url,
             }
+            if ean:
+                result["ean"] = ean
+            return result
         except Exception:
             return None
 
@@ -200,8 +210,8 @@ class GoogleShoppingScraper:
         except (ValueError, TypeError):
             return None
 
-    def search_competitors(self, product_name):
-        """Search Google Shopping for competitor prices for a product."""
+    def _search_shopping(self, query):
+        """Execute a Google Shopping search via SerpAPI."""
         api_key = self.settings.get("serpapi_key", "")
         if not api_key:
             raise ValueError(
@@ -211,7 +221,7 @@ class GoogleShoppingScraper:
 
         params = {
             "engine": "google_shopping",
-            "q": product_name,
+            "q": query,
             "gl": self.settings.get("country", "de"),
             "hl": self.settings.get("language", "de"),
             "api_key": api_key,
@@ -231,8 +241,10 @@ class GoogleShoppingScraper:
         if "error" in data:
             raise ValueError(f"SerpAPI: {data['error']}")
 
-        shopping_results = data.get("shopping_results", [])
+        return data.get("shopping_results", [])
 
+    def _extract_competitors(self, shopping_results, megazoo_price=None):
+        """Extract and filter competitor results."""
         competitors = []
         for item in shopping_results:
             price = self._parse_price(item.get("extracted_price") or item.get("price"))
@@ -240,9 +252,15 @@ class GoogleShoppingScraper:
                 continue
 
             source = item.get("source", "Unbekannt")
-            # Skip megazoo results
             if "megazoo" in source.lower():
                 continue
+
+            # Price tolerance filter: skip results >200% or <20% of megazoo price
+            # (likely a different product)
+            if megazoo_price and megazoo_price > 0:
+                ratio = price / megazoo_price
+                if ratio > 3.0 or ratio < 0.2:
+                    continue
 
             competitors.append({
                 "title": item.get("title", ""),
@@ -251,13 +269,33 @@ class GoogleShoppingScraper:
                 "link": item.get("link", ""),
             })
 
-        # Sort by price
         competitors.sort(key=lambda x: x["price"])
         return competitors[:6]
 
+    def search_competitors(self, product_name, ean=None, megazoo_price=None):
+        """Search Google Shopping for competitor prices.
+        Strategy: 1) Search by EAN (exact match), 2) Fallback to product name.
+        Uses only 1 API call - EAN search if available, otherwise name search.
+        """
+        # Strategy 1: Search by EAN (most accurate, exact product match)
+        if ean:
+            results = self._search_shopping(ean)
+            competitors = self._extract_competitors(results, megazoo_price)
+            if competitors:
+                return competitors, "ean"
+
+        # Strategy 2: Search by product name
+        results = self._search_shopping(product_name)
+        competitors = self._extract_competitors(results, megazoo_price)
+        return competitors, "name"
+
     def compare_product(self, megazoo_product):
         """Compare a single megazoo product with Google Shopping competitors."""
-        competitors = self.search_competitors(megazoo_product["name"])
+        competitors, search_method = self.search_competitors(
+            megazoo_product["name"],
+            ean=megazoo_product.get("ean"),
+            megazoo_price=megazoo_product.get("price"),
+        )
 
         competitor_prices = [c["price"] for c in competitors]
         avg_price = round(sum(competitor_prices) / len(competitor_prices), 2) if competitor_prices else None
@@ -275,6 +313,8 @@ class GoogleShoppingScraper:
             "product_name": megazoo_product["name"],
             "megazoo_price": megazoo_price,
             "megazoo_url": megazoo_product["url"],
+            "ean": megazoo_product.get("ean"),
+            "search_method": search_method,
             "competitors": competitors,
             "avg_competitor_price": avg_price,
             "deviation_percent": deviation,

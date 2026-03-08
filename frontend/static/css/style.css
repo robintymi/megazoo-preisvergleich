@@ -244,6 +244,19 @@ td a:hover { text-decoration: underline; }
     color: #e74c3c;
 }
 
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.badge-ean { background: #d5f5e3; color: #1e8449; }
+.badge-name { background: #fef9e7; color: #b7950b; }
+
 footer { text-align: center; padding: 2rem; color: #888; font-size: 0.85rem; }
 .hidden { display: none; }
 

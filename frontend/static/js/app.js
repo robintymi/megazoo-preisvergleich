@@ -252,9 +252,14 @@ function renderResults() {
             ? (item.deviation_percent > 0 ? "+" : "") + item.deviation_percent + "%"
             : "-";
 
+        const methodBadge = item.search_method === "ean"
+            ? '<span class="badge badge-ean" title="Exakte Suche per EAN/GTIN">EAN</span>'
+            : '<span class="badge badge-name" title="Suche per Produktname">Name</span>';
+
         tr.innerHTML = `
             <td>
                 <a href="${escapeHtml(item.megazoo_url || '#')}" target="_blank">${escapeHtml(item.product_name)}</a>
+                ${item.ean ? '<small>EAN: ' + escapeHtml(item.ean) + '</small>' : ''}
             </td>
             <td><strong>${formatPrice(item.megazoo_price)}</strong></td>
             <td>${renderCompetitor(comp[0])}</td>
@@ -263,6 +268,7 @@ function renderResults() {
             <td>${formatPrice(item.avg_competitor_price)}</td>
             <td class="${devClass}">${devText}</td>
             <td>${formatPrice(item.recommended_price)}</td>
+            <td>${methodBadge}</td>
         `;
         tbody.appendChild(tr);
     });

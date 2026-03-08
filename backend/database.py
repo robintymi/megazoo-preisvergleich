@@ -28,6 +28,8 @@ class Database:
                 product_name TEXT NOT NULL,
                 megazoo_price REAL,
                 megazoo_url TEXT,
+                ean TEXT,
+                search_method TEXT,
                 competitors_json TEXT,
                 avg_competitor_price REAL,
                 deviation_percent REAL,
@@ -43,14 +45,16 @@ class Database:
         conn = self._get_conn()
         conn.execute("""
             INSERT INTO comparisons
-            (product_name, megazoo_price, megazoo_url,
+            (product_name, megazoo_price, megazoo_url, ean, search_method,
              competitors_json, avg_competitor_price, deviation_percent,
              recommended_price, competitor_count, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             comparison["product_name"],
             comparison.get("megazoo_price"),
             comparison.get("megazoo_url"),
+            comparison.get("ean"),
+            comparison.get("search_method"),
             json.dumps(comparison.get("competitors", []), ensure_ascii=False),
             comparison.get("avg_competitor_price"),
             comparison.get("deviation_percent"),
