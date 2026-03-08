@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Megazoo Preisvergleich</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Megazoo Preisvergleich</h1>
+        <p class="subtitle">Google Shopping Preisanalyse</p>
+    </header>
+
+    <main>
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Produktname eingeben..." autocomplete="off">
+                <button id="searchBtn" onclick="searchProduct()">Suchen</button>
+            </div>
+            <div id="searchStatus" class="status-message"></div>
+        </section>
+
+        <!-- Results Section -->
+        <section id="resultsSection" class="results-section hidden">
+            <h2>Ergebnis: <span id="resultProductName"></span></h2>
+
+            <div class="summary-cards">
+                <div class="card megazoo-card">
+                    <h3>Megazoo Preis</h3>
+                    <div class="price" id="megazooPrice">-</div>
+                    <div class="source" id="megazooSource"></div>
+                </div>
+                <div class="card avg-card">
+                    <h3>Durchschnitt Konkurrenz</h3>
+                    <div class="price" id="avgPrice">-</div>
+                    <div class="source" id="competitorCount"></div>
+                </div>
+                <div class="card deviation-card">
+                    <h3>Abweichung</h3>
+                    <div class="price" id="deviation">-</div>
+                    <div class="source" id="deviationLabel"></div>
+                </div>
+                <div class="card recommended-card">
+                    <h3>Empfohlener Preis</h3>
+                    <div class="price" id="recommendedPrice">-</div>
+                    <div class="source">3% unter Durchschnitt</div>
+                </div>
+            </div>
+
+            <h3>Detailvergleich</h3>
+            <div class="table-wrapper">
+                <table id="comparisonTable">
+                    <thead>
+                        <tr>
+                            <th>Anbieter</th>
+                            <th>Preis</th>
+                            <th>Abweichung zum Durchschnitt</th>
+                            <th>Link</th>
+                        </tr>
+                    </thead>
+                    <tbody id="comparisonBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- History Section -->
+        <section class="history-section">
+            <div class="section-header">
+                <h2>Verlauf</h2>
+                <button class="btn-secondary" onclick="exportCSV()">CSV Export</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="historyTable">
+                    <thead>
+                        <tr>
+                            <th>Datum</th>
+                            <th>Produkt</th>
+                            <th>Megazoo</th>
+                            <th>Konkurrent 1</th>
+                            <th>Konkurrent 2</th>
+                            <th>Durchschnitt (6)</th>
+                            <th>Abweichung %</th>
+                            <th>Empfohlen</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Settings Section -->
+        <section class="settings-section">
+            <h2>Einstellungen</h2>
+            <div class="settings-form">
+                <div class="form-group">
+                    <label for="apiKey">SerpAPI Key</label>
+                    <input type="password" id="apiKey" placeholder="Kostenlos auf serpapi.com registrieren">
+                    <small>100 Suchen/Monat gratis. <a href="https://serpapi.com" target="_blank">Key holen</a></small>
+                </div>
+                <button onclick="saveSettings()">Speichern</button>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Megazoo Preisvergleich Tool | Google Shopping Analyse</p>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
