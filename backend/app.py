@@ -5,10 +5,14 @@ Automatisch Produkte von megazoo-shop.de crawlen und mit Google Shopping verglei
 
 from flask import Flask, jsonify, request, send_from_directory, Response
 import os
+import sys
 import json
 import csv
 import io
 import threading
+
+# Support both direct run and import from root
+sys.path.insert(0, os.path.dirname(__file__))
 from database import Database
 from scraper import MegazooCrawler, GoogleShoppingScraper
 
